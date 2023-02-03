@@ -101,6 +101,31 @@ vga_putc (int c)
 
   intr_set_level (old_level);
 }
+
+// "delete" a character from the screen
+// #NOTE(Sean) does not backspace across rows
+void vga_backspace(void)
+{
+  /* Disable interrupts to lock out interrupt handlers
+     that might write to the console. */
+  enum intr_level old_level = intr_disable();
+
+  init();
+
+  // #TODO backspaces across rows
+  if (cx > 0)
+  {
+    --cx;
+    fb[cy][cx][0] = ' ';
+    fb[cy][cx][1] = GRAY_ON_BLACK;
+
+    move_cursor();
+  }
+
+  // enable interrupts
+  intr_set_level(old_level);
+}
+
 
 /* Clears the screen and moves the cursor to the upper left. */
 static void

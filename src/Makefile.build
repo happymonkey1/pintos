@@ -21,6 +21,7 @@ threads_SRC += threads/intr-stubs.S	# Interrupt stubs.
 threads_SRC += threads/synch.c		# Synchronization.
 threads_SRC += threads/palloc.c		# Page allocator.
 threads_SRC += threads/malloc.c		# Subpage allocator.
+threads_SRC += threads/shell.c		# Shell code for Lab0
 
 # Device driver code.
 devices_SRC  = devices/pit.c		# Programmable interrupt timer chip.
@@ -116,6 +117,9 @@ kernel.img: kernel.bin loader.bin
 
 qemu: $(IMAGE)
 	$(QEMU) -drive file=$(IMAGE),index=0,media=disk,format=raw $(QEMUOPTS)
+
+qemu-win: $(IMAGE)
+	powershell.exe $(QEMU) -drive file=$(IMAGE),index=0,media=disk,format=raw $(QEMUOPTS)
 
 qemu-nox: $(IMAGE)
 	@echo "***"

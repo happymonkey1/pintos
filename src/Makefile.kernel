@@ -20,6 +20,8 @@ image: build/kernel.img
 
 qemu: build/qemu
 
+qemu-win: build/qemu-win
+
 qemu-nox: build/qemu-nox
 
 clean:

@@ -130,7 +130,9 @@ struct printf_conversion
 struct integer_base 
   {
     int base;                   /* Base. */
-    const char *digits;         /* Collection of digits. */
+    // #NOTE(Sean) fix infinite boot issue const char* -> char[16]
+    //             https://github.com/ryanphuang/PintosM/issues/1
+    char digits[16];            /* Collection of digits. */
     int x;                      /* `x' character to use, for base 16 only. */
     int group;                  /* Number of digits to group with ' flag. */
   };

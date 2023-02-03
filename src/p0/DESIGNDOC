@@ -1,0 +1,147 @@
+            +-------------------------+
+			|      CompSci 143A       |
+			| PROJECT 0: Getting Real |
+			|     DESIGN DOCUMENT     |
+			+-------------------------+
+				   
+---- AUTHOR ----
+
+Sean Browne sjbrowne@uci.edu
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, or notes for the
+>> TAs, please give them here.
+
+I was able to "easily" fix the infinite loop bug, and use a modern toolchain (latest gcc, etc.)
+
+I am using windows + wsl so I made some modifications to my makefile(s).
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+Citation: https://github.com/ryanphuang/PintosM/issues/1
+I used this GitHub issue to fix the infinite loop bug
+
+			     Booting Pintos
+			     ==============
+
+---- QUESTIONS ---- 
+>> Put the screenshots of Pintos running in src/p0.
+
+screenshot is in src/p0/booting_screenshot.png
+
+>> A1: Is there any particular issue that you would like us to know?
+
+N/A
+
+			     Kernel Monitor
+			     ==============
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+location: "src/lib/stdio.c"
+struct integer_base 
+  {
+    int base;                   /* Base. */
+    // #NOTE(Sean) fix infinite boot issue const char* -> char[16]
+    //             https://github.com/ryanphuang/PintosM/issues/1
+    char digits[16];            /* Collection of digits. */
+    int x;                      /* `x' character to use, for base 16 only. */
+    int group;                  /* Number of digits to group with ' flag. */
+  };
+
+I changed the const char* declaration to char[16] to fix the infinite loop bug, as described in the GitHub issue 
+above.
+
+---- ALGORITHMS ----
+>> C2: Explain how you read and write to the console for the kernel monitor.
+
+The simple shell prints the shell message to the console, then reads the users input (see readline explanation 
+below), and finally does string comparison to check for the two commands: 'exit' and 'whoami'. This process is 
+looped until 'exit' is encountered, which will break out.
+
+======================
+Psuedo code for shell:
+======================
+
+while true
+    print "ICS143A> "
+    readline() # puts user entered keys into buffer
+
+    if buffer and "exit" are equal
+        print "exiting shell"
+        return
+    else if buffer and "whoami" are equal
+        print "Sean Browne"
+    else
+        print "invalid command"
+
+======================
+
+The local buffer has an arbitrary length of 64 (to match the maximum internal input buffer length), but could easily
+be extended if this is not enough.
+
+The readline function is the bulk of the code implemented. There is a local buffer which stores user entered characters (which are retrieved using input_getc()), and continues to fill the buffer until it is full or the user 
+hits the return (enter) key. 
+
+The local key buffer is nulled out before reading keys to make sure we have a null terminated string (in case we 
+wanted to print out what command was entered in addition to "invalid command").
+
+======================================
+Psuedo code for the readline function:
+======================================
+
+null out buffer
+
+while buffer is not empty
+    key = get_key()
+    if key is enter or buffer full
+        break
+    
+    can backspace := key is backspace and buffer is not empty
+    if can backspace
+        remove last key from buffer
+        remove last character from display
+    
+    if key is not backspace
+        display key to screen
+        add key to buffer
+
+======================================
+
+To print characters to the screen I use the the `putchar` function provided by the console, and for printing out
+strings (c string) I use the `printf` function provided by stdio.
+
+>> C3: Any additional enhancement you implement?
+
+I implemented deleting (hitting backspace) characters while the user is typing. If the local key buffer is 
+not empty, then the last key in the local buffer is nulled, and a vga helper function (vga_backspace) is called
+to remove the character from the vga framebuffer. 
+
+To remove the character from the display, `vga_backspace` first moves the cursor position to the previous 
+character's location, writes a space (' ') where the old character was, and finally calls `move_cursor` to update 
+the cursor's draw position.
+
+=============================
+Pseudo code for vga_backspace
+=============================
+
+disable interrupts
+
+try initialize vga driver
+
+if cursor_x > 0
+    cursor_x := cursor_x - 1
+    remove character from framebuffer at (cursor_x, cursor_y) # set = ' '
+
+    move cursor # (on screen)
+
+enable interrupts
+
+=============================

@@ -7,7 +7,8 @@
 
 // defined here because I couldn't find a def
 // #NOTE(Sean) enter scan code online says 0x1c but printing the returned key says 13?
-#define ENTER_KEY_CODE 13
+#define CARRIAGE_RETURN 13
+#define NEW_LINE_RETURN 10
 #define BACKSPACE_KEY_CODE 8
 
 // same size as intq buffer
@@ -40,7 +41,7 @@ void readline(void)
     {
         char key = (char)input_getc();
         // check for newline or buffer overflow
-        if (key == ENTER_KEY_CODE || buffer_index >= KEY_BUFFER_SIZE)
+        if (key == CARRIAGE_RETURN || key == NEW_LINE_RETURN || buffer_index >= KEY_BUFFER_SIZE)
             break;
         
         // check whether we are able to backspace
@@ -78,10 +79,7 @@ void shell_init(void)
         readline();
         // check for built-in commands
         if (strcmp(key_buffer, "exit") == 0)
-        {
-            printf("exiting shell\n");
             return;
-        }
         else if (strcmp(key_buffer, "whoami") == 0)
             printf("Sean Browne\n");
         else

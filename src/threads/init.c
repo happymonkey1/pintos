@@ -136,7 +136,7 @@ pintos_init (void)
     run_actions (argv);
   } else {
     // initialize and run simple shell
-    shell_init();
+    // shell_init();
   }
 
   /* Finish up. */
@@ -289,7 +289,7 @@ static void
 run_task (char **argv)
 {
   const char *task = argv[1];
-  
+
   printf ("Executing '%s':\n", task);
 #ifdef USERPROG
   process_wait (process_execute (task));
@@ -332,16 +332,22 @@ run_actions (char **argv)
       int i;
 
       /* Find action name. */
-      for (a = actions; ; a++)
+      int actions_size = sizeof(actions) / sizeof(struct action);
+      for (int action_index = 0; action_index < actions_size; ++action_index)
+      {
+        a = &actions[action_index];
         if (a->name == NULL)
           PANIC ("unknown action `%s' (use -h for help)", *argv);
         else if (!strcmp (*argv, a->name))
           break;
-
+      }
       /* Check for required arguments. */
       for (i = 1; i < a->argc; i++)
+      {
         if (argv[i] == NULL)
           PANIC ("action `%s' requires %d argument(s)", *argv, a->argc - 1);
+        printf("found argument: %s\n", argv[i]);
+      }
 
       /* Invoke action and advance. */
       a->function (argv);

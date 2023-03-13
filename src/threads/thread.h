@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "synch.h" // for semaphore struct
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -89,7 +90,13 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
-
+    
+    // owned by timer.c
+    int64_t m_wakeup_tick;                      // store minimum tick for when a *sleeping* thread should be woken up
+    struct semaphore m_sleep_timer_semaphore;   // sempahore to block sleeping threads
+    struct list_elem m_sleep_timer;             // store sleep timer for a thread, used with m_wakeup_tick
+    // ================
+    
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 

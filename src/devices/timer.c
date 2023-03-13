@@ -30,6 +30,9 @@ static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
 
+// list of blocked threads
+static struct list s_blocked_threads_list;
+
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
 void
@@ -37,6 +40,8 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  // initialize blocked thread list
+  list_init(&s_blocked_threads_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -89,11 +94,20 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
+  int64_t start = timer_ticks();
 
-  ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  // get the current thread that sleep was called on
+  struct thread* current_thread = thread_current();
+
+  enum intr_level old_level = intr_disable(); // disable interrupts 
+  // calculate wakeup time and store on thread
+  current_thread->m_wakeup_tick = start + ticks;
+  // add the current thread to the blocked list
+  list_push_back(&s_blocked_threads_list, &(current_thread->m_sleep_timer));
+  intr_set_level(old_level); // enable interrupts
+
+  // block current thread (should this also be in critical section?)
+  sema_down(&current_thread->m_sleep_timer_semaphore);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +186,35 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+  
+  if (list_empty(&s_blocked_threads_list))
+    return;
+  
+  // should this be done in thread_tick?
+  // #NOTE(Sean) i don't think we need to disable interrupts here, since we are already inside an interrupt
+  
+  struct list_elem* it = list_begin(&s_blocked_threads_list);
+  struct list_elem* end = list_end(&s_blocked_threads_list);
+  while (it != end)
+  {
+    // get thread struct using list_entry macro and iterator
+    struct thread* blocked_thread = list_entry(it, struct thread, m_sleep_timer);
+    // check for panic state
+    ASSERT(blocked_thread);
+    // skip if we should still wait
+    if (ticks < blocked_thread->m_wakeup_tick)
+    {
+      it = list_next(it);
+      continue;
+    }
+
+    // if we get here, we are passed the waiting period for the blocked thread, so we try waking up the thread
+    sema_up(&blocked_thread->m_sleep_timer_semaphore);
+    // remove the current iterator element from the list (list_remove returns a pointer to the next element)
+    enum intr_level old_level = intr_disable();
+    it = list_remove(it); 
+    intr_set_level(old_level);
+  }
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

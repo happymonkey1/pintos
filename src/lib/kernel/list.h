@@ -128,6 +128,9 @@ void list_init (struct list *);
 struct list_elem *list_begin (struct list *);
 struct list_elem *list_next (struct list_elem *);
 struct list_elem *list_end (struct list *);
+const struct list_elem* list_cbegin(const struct list*);
+const struct list_elem* list_cnext(const struct list_elem*);
+const struct list_elem* list_cend(const struct list*);
 
 struct list_elem *list_rbegin (struct list *);
 struct list_elem *list_prev (struct list_elem *);

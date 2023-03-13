@@ -68,7 +68,8 @@ sema_down (struct semaphore *sema)
   old_level = intr_disable ();
   while (sema->value == 0) 
     {
-      list_push_back (&sema->waiters, &thread_current ()->elem);
+      list_insert_ordered (&sema->waiters, &thread_current()->elem, compare_threads_by_priority, NULL);
+      
       thread_block ();
     }
   sema->value--;
@@ -114,7 +115,7 @@ sema_up (struct semaphore *sema)
 
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
+    thread_unblock (list_entry (list_pop_back (&sema->waiters),
                                 struct thread, elem));
   sema->value++;
   intr_set_level (old_level);
@@ -196,8 +197,25 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
+  // #TODO nested priority donation
+  // check if there are waiters, and see if donation is possible
+  struct list* waiters = &lock->semaphore.waiters;
+  if (!list_empty(waiters) && lock->holder)
+  {
+    struct list_elem* it;
+    for (it = list_begin(waiters); it != list_end(waiters); it = list_next(it))
+    {
+      struct thread* donor = list_entry(it, struct thread, elem);
+      if (lock->holder->priority < donor->priority)
+      {
+        thread_donate_priority(lock->holder, donor);
+        printf("fuck you\n");
+      }
+    }
+  }
+
   sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  lock->holder = thread_current();
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -230,6 +248,28 @@ lock_release (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
+
+  // #TODO nested priority donation revoke
+  // check if there are waiters, and remove any donations
+  struct list* waiters = &lock->semaphore.waiters;
+  if (!list_empty(waiters))
+  {
+    // #NOTE(Sean) O(n^2) bad!!!!
+    for (struct list_elem* wait_it = list_begin(waiters); wait_it != list_end(waiters); wait_it = list_next(wait_it))
+    {
+      const struct thread* waiter = list_entry(wait_it, struct thread, elem);
+      // iterate donors list, and check for matches
+      for (struct list_elem* donor_it = list_begin(&lock->holder->m_donatees); 
+        donor_it != list_end(&lock->holder->m_donatees);)
+      {
+        const struct thread* donor = list_entry(donor_it, struct thread, m_donor_elem);
+        if (waiter->tid == donor->tid)
+          donor_it = list_remove(donor_it);
+        else
+          donor_it = list_next(donor_it);
+      }
+    }
+  }
 
   lock->holder = NULL;
   sema_up (&lock->semaphore);
@@ -295,7 +335,7 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
-  list_push_back (&cond->waiters, &waiter.elem);
+  list_insert_ordered(&cond->waiters, &waiter.elem, compare_threads_by_priority, NULL);
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
@@ -317,7 +357,7 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock_held_by_current_thread (lock));
 
   if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_front (&cond->waiters),
+    sema_up (&list_entry (list_pop_back (&cond->waiters),
                           struct semaphore_elem, elem)->semaphore);
 }
 

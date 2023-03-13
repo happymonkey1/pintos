@@ -75,6 +75,14 @@ list_begin (struct list *list)
   return list->head.next;
 }
 
+/* Returns the beginning of LIST as an immutable reference.  */
+const struct list_elem* list_cbegin(const struct list* list)
+{
+  ASSERT (list != NULL);
+  return list->head.next;
+}
+
+
 /* Returns the element after ELEM in its list.  If ELEM is the
    last element in its list, returns the list tail.  Results are
    undefined if ELEM is itself a list tail. */
@@ -85,6 +93,16 @@ list_next (struct list_elem *elem)
   return elem->next;
 }
 
+/* Returns the (const) element after ELEM in its list.  If ELEM is the
+   last element in its list, returns the list tail.  Results are
+   undefined if ELEM is itself a list tail. */
+const struct list_elem* list_cnext(const struct list_elem* elem)
+{
+  ASSERT (is_head (elem) || is_interior (elem));
+  return elem->next;
+}
+
+
 /* Returns LIST's tail.
 
    list_end() is often used in iterating through a list from
@@ -92,6 +110,17 @@ list_next (struct list_elem *elem)
    an example. */
 struct list_elem *
 list_end (struct list *list)
+{
+  ASSERT (list != NULL);
+  return &list->tail;
+}
+
+/* Returns a const pointer to the LIST's tail element.
+
+   list_cend() is often used in iterating through a list from
+   front to back.  See the big comment at the top of list.h for
+   an example. */
+const struct list_elem* list_cend(const struct list* list)
 {
   ASSERT (list != NULL);
   return &list->tail;

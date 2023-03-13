@@ -72,8 +72,26 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+// helper function to get the *modified* priority of a thread (higher value between donations and base)
+static int get_modified_priority_of_thread(const struct thread* t)
+{
+  int highest_prio = t->priority;
+  if (list_empty(&t->m_donatees))
+    return highest_prio;
+
+  // iterate donor list and get the highest priority
+  for (const struct list_elem* it = list_cbegin(&t->m_donatees); it != list_cend(&t->m_donatees); it = list_cnext(it))
+  {
+    const struct thread* donor = list_entry(it, struct thread, m_donor_elem);
+    if (donor->priority > highest_prio)
+      highest_prio = donor->priority;
+  }
+
+  return highest_prio;
+}
+
 // function to compare the priority of two threads (which are elements of the ready list)
-static bool compare_threads_by_priority(
+bool compare_threads_by_priority(
   const struct list_elem* thread_elem1, 
   const struct list_elem* thread_elem2,
   __attribute__((unused)) void* aux)
@@ -82,8 +100,8 @@ static bool compare_threads_by_priority(
   const struct thread* thread1 = list_entry(thread_elem1, struct thread, elem);
   const struct thread* thread2 = list_entry(thread_elem2, struct thread, elem);
 
-  // compare priorities
-  return thread1->priority < thread2->priority;
+  // compare priorities and donations
+  return get_modified_priority_of_thread(thread1) < get_modified_priority_of_thread(thread2);
 }
 
 
@@ -364,11 +382,23 @@ thread_set_priority (int new_priority)
   thread_yield();
 }
 
+void thread_donate_priority(struct thread* receiver, struct thread* donor)
+{
+  // check for programmer error
+  ASSERT(receiver != donor);
+  // add to donator list
+  enum intr_level old_level = intr_disable();
+  list_push_back(&receiver->m_donatees, &donor->m_donor_elem);
+  intr_set_level(old_level);
+}
+
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+  const struct thread* t = thread_current();
+  // return the greater value between the base priority and donated priorities
+  return get_modified_priority_of_thread(t);
 }
 
 /* Sets the current thread's nice value to NICE. */
@@ -488,8 +518,8 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
-  // initialize wait semaphore for sleep timer
-  sema_init(&(t->m_sleep_timer_semaphore), 0);
+  sema_init(&(t->m_sleep_timer_semaphore), 0); // initialize wait semaphore for sleep timer
+  list_init(&t->m_donatees); // initialize donatees list
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();

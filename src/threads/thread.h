@@ -93,10 +93,13 @@ struct thread
     
     // owned by timer.c
     int64_t m_wakeup_tick;                      // store minimum tick for when a *sleeping* thread should be woken up
-    struct semaphore m_sleep_timer_semaphore;   // sempahore to block sleeping threads
     struct list_elem m_sleep_timer;             // store sleep timer for a thread, used with m_wakeup_tick
     // ================
     
+    // shared by timer.c and thread.c
+    struct semaphore m_sleep_timer_semaphore;   // sempahore to block sleeping threads
+    // ==============================
+
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
 

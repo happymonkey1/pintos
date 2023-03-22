@@ -33,23 +33,66 @@
 #include "threads/thread.h"
 
 // helper function that can recursively donate priorities
-static void donate_priority_recursive(struct lock* lock)
+static void donate_priority_recursive(struct lock* lock, int depth)
 {
   // don't do work if there is no one holding the lock
-  if (lock->holder == NULL)
+  if (lock->holder == NULL || depth > 10)
     return;
 
-  // disable interrupts so we do not modify the queue while iterating
-  enum intr_level old_level = intr_disable();
-
   struct thread* holder = lock->holder;
-  // check if we were donated priority
-  if (get_modified_priority_of_thread(holder) > holder->priority)
+
+  struct lock* waiting_lock = &holder->m_waiting_for_lock;
+  // don't try nested donation if there is nobody waiting
+  if (waiting_lock == NULL || waiting_lock->holder == NULL)
+    return;
+  
+
+  struct thread* waiting_lock_holder = waiting_lock->holder;
+
+  // let's not donate to ourself
+  if (waiting_lock_holder == holder)
+    return;
+  
+  // donate to the holder of a lock we are waiting on
+  thread_donate_priority(waiting_lock_holder, holder);
+  set_ready_list_dirty(true);
+  
+  // recurse
+  donate_priority_recursive(waiting_lock, depth + 1);
+  
+  // see if we need to requeue a thread waiting for a lock that got released
+  if (holder->m_waiting_for_lock == NULL)
   {
-
+    add_to_ready_queue(holder);
+    return;
   }
+}
 
-  intr_set_level(old_level);
+static void revoke_donated_priority_recursive(struct lock* lock)
+{
+  struct list* waiters = &lock->semaphore.waiters;
+  if (!list_empty(waiters))
+  {
+    // #NOTE(Sean) O(n^2) bad!!!!
+    for (struct list_elem* wait_it = list_begin(waiters); wait_it != list_end(waiters); wait_it = list_next(wait_it))
+    {
+      const struct thread* waiter = list_entry(wait_it, struct thread, elem);
+      // iterate donors list, and check for matches
+      for (struct list_elem* donor_it = list_begin(&lock->holder->m_donatees); 
+        donor_it != list_end(&lock->holder->m_donatees);)
+      {
+        struct thread* donor = list_entry(donor_it, struct thread, m_donor_elem);
+        if (waiter->tid == donor->tid)
+        {
+          donor_it = list_remove(donor_it);
+          donor->m_donated = false;
+          set_ready_list_dirty(true);
+        }
+        else
+          donor_it = list_next(donor_it);
+      }
+    }
+  }
 }
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
@@ -86,9 +129,13 @@ sema_down (struct semaphore *sema)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
+  // make sure we re-sort by priorities, because priorities could have changed from donations
+  //if (!list_empty(&sema->waiters))
+  //  list_sort(&sema->waiters, &compare_threads_by_priority, NULL);
+  
   while (sema->value == 0) 
   {
-    list_insert_ordered (&sema->waiters, &thread_current()->elem, compare_threads_by_priority, NULL);
+    list_insert_ordered(&sema->waiters, &thread_current()->elem, &compare_threads_by_priority, NULL);
     thread_block ();
   }
   sema->value--;
@@ -222,28 +269,21 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  // #TODO nested priority donation
-  // check if there are waiters, and see if donation is possible
-  // disable interrupts so queue isn't modified while reading
-  /*enum intr_level old_level = intr_disable();
-  struct list* waiters = &lock->semaphore.waiters;
-  if (!list_empty(waiters) && lock->holder)
+  struct thread* cur = thread_current();
+  // add lock to list of locks the thread is waiting on
+  cur->m_waiting_for_lock = lock;
+  // donate if possible
+  if (lock->holder != NULL && lock->holder != thread_current())
   {
-    struct list_elem* it;
-    for (it = list_begin(waiters); it != list_end(waiters); it = list_next(it))
-    {
-      struct thread* donor = list_entry(it, struct thread, elem);
-      if (lock->holder->priority < donor->priority)
-      {
-        thread_donate_priority(lock->holder, donor);
-      }
-    }
+    thread_donate_priority(lock->holder, thread_current());
+    set_ready_list_dirty(true);
   }
-  // re enable interrupts
-  intr_set_level(old_level);*/
+  
+  donate_priority_recursive(lock, 0);
+
 
   sema_down (&lock->semaphore);
-  lock->holder = thread_current();
+  lock->holder = cur;
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -277,35 +317,21 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  // if the thread is waiting for the current lock which is about to be released,
+  // remove the reference
+  struct thread* t = thread_current();
+  if (t->m_waiting_for_lock == lock)
+    t->m_waiting_for_lock = NULL;
+
   // #TODO nested priority donation revoke
   // check if there are waiters, and remove any donations
   // disable interrupts so queue isn't modified while reading
-  /*enum intr_level old_level = intr_disable();
-  struct list* waiters = &lock->semaphore.waiters;
-  if (!list_empty(waiters))
-  {
-    // #NOTE(Sean) O(n^2) bad!!!!
-    for (struct list_elem* wait_it = list_begin(waiters); wait_it != list_end(waiters); wait_it = list_next(wait_it))
-    {
-      const struct thread* waiter = list_entry(wait_it, struct thread, elem);
-      // iterate donors list, and check for matches
-      for (struct list_elem* donor_it = list_begin(&lock->holder->m_donatees); 
-        donor_it != list_end(&lock->holder->m_donatees);)
-      {
-        const struct thread* donor = list_entry(donor_it, struct thread, m_donor_elem);
-        if (waiter->tid == donor->tid)
-          donor_it = list_remove(donor_it);
-        else
-          donor_it = list_next(donor_it);
-      }
-    }
-  }
+  revoke_donated_priority_recursive(lock);
 
-  intr_set_level(old_level);*/
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 
-  //thread_yield();
+  thread_yield();
 }
 
 /* Returns true if the current thread holds LOCK, false
@@ -318,7 +344,7 @@ lock_held_by_current_thread (const struct lock *lock)
 
   return lock->holder == thread_current ();
 }
-
+
 /* One semaphore in a list. */
 struct semaphore_elem 
   {
@@ -368,7 +394,7 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
-  list_insert_ordered(&cond->waiters, &waiter.elem, compare_threads_by_priority, NULL);
+  list_push_back(&cond->waiters, &waiter.elem);
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
@@ -390,7 +416,7 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock_held_by_current_thread (lock));
 
   if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_back (&cond->waiters),
+    sema_up (&list_entry (list_pop_front (&cond->waiters),
                           struct semaphore_elem, elem)->semaphore);
 }
 

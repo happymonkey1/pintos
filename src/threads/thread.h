@@ -107,6 +107,8 @@ struct thread
     struct list_elem elem;                      /* List element. */
     struct list m_donatees;                     // list of threads which are donating priority
     struct list_elem m_donor_elem;              // list element of donor list
+    bool m_donated;                             // flag for whether the thread has donated so we don't donate multiple times
+    struct lock* m_waiting_for_lock;            // pointer to a lock that is blocking thread
     // =======================================
 
 #ifdef USERPROG
@@ -129,12 +131,21 @@ void thread_recalculate_recent_cpu(void);
 void thread_recalculate_load_avg(void);
 // helper function to get a *modified* priority of a thread (max value of actual priority and donated priorities)
 int get_modified_priority_of_thread(const struct thread* t);
+// helper function to add a thread back into the ready queue
+// ensures that the ready queue is always sorted by priority
+void add_to_ready_queue(struct thread* t);
+// used to requeue a thread into the ready list when it was waiting for a lock which has since been released.
+void thread_requeue_after_lock_release(struct thread* t);
 
 void thread_init (void);
 void thread_start (void);
 
 void thread_tick (void);
 void thread_print_stats (void);
+
+// helper function to tag the ready list as "dirty", meaning we have adjusted priorities through donation
+// and the list may not be in order any more
+void set_ready_list_dirty(bool dirty);
 
 typedef void thread_func (void *aux);
 tid_t thread_create (const char *name, int priority, thread_func *, void *);
@@ -162,6 +173,6 @@ void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
 
-bool compare_threads_by_priority(const struct list_elem* thread_elem1, const struct list_elem* thread_elem2, void* aux);
+NO_INLINE bool compare_threads_by_priority(const struct list_elem* thread_elem1,  const struct list_elem* thread_elem2, void* aux);
 
 #endif /* threads/thread.h */

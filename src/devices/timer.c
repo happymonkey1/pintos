@@ -34,10 +34,10 @@ static void real_time_delay (int64_t num, int32_t denom);
 static struct list s_blocked_threads_list;
 
 // helper function to compare sleeping threads by wakeup tick
-static bool compare_sleeping_thread_ticks(struct list_elem* a, struct list_elem* b, void* aux UNUSED)
+static bool compare_sleeping_thread_ticks(const struct list_elem* a, const struct list_elem* b, void* aux)
 {
-  struct thread* thread_a = list_entry(a, struct thread, m_sleep_timer);
-  struct thread* thread_b = list_entry(b, struct thread, m_sleep_timer);
+  const struct thread* thread_a = list_entry(a, struct thread, m_sleep_timer);
+  const struct thread* thread_b = list_entry(b, struct thread, m_sleep_timer);
 
   return thread_a->m_wakeup_tick < thread_b->m_wakeup_tick;
 }

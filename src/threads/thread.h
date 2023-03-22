@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "synch.h" // for semaphore struct
+#include "fixed_point.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -90,7 +91,9 @@ struct thread
     uint8_t *stack;                             /* Saved stack pointer. */
     int priority;                               /* Priority. */
     struct list_elem allelem;                   /* List element for all threads list. */
-    
+    fp_real m_recent_cpu;                       // amount of CPU time a thread has received "recently"
+    int m_nice_value;                           // "nice" value of the thread
+
     // owned by timer.c
     int64_t m_wakeup_tick;                      // store minimum tick for when a *sleeping* thread should be woken up
     struct list_elem m_sleep_timer;             // store sleep timer for a thread, used with m_wakeup_tick
@@ -119,6 +122,13 @@ struct thread
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
+
+// helper function to recalculate recent cpu for all threads (occurs once per second due to assumptions made)
+void thread_recalculate_recent_cpu(void);
+// helper function to re-caclulate load average over all threads (occurs once per second due to assumptions made)
+void thread_recalculate_load_avg(void);
+// helper function to get a *modified* priority of a thread (max value of actual priority and donated priorities)
+int get_modified_priority_of_thread(const struct thread* t);
 
 void thread_init (void);
 void thread_start (void);

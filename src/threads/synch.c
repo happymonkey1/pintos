@@ -32,6 +32,26 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+// helper function that can recursively donate priorities
+static void donate_priority_recursive(struct lock* lock)
+{
+  // don't do work if there is no one holding the lock
+  if (lock->holder == NULL)
+    return;
+
+  // disable interrupts so we do not modify the queue while iterating
+  enum intr_level old_level = intr_disable();
+
+  struct thread* holder = lock->holder;
+  // check if we were donated priority
+  if (get_modified_priority_of_thread(holder) > holder->priority)
+  {
+
+  }
+
+  intr_set_level(old_level);
+}
+
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -67,11 +87,10 @@ sema_down (struct semaphore *sema)
 
   old_level = intr_disable ();
   while (sema->value == 0) 
-    {
-      list_insert_ordered (&sema->waiters, &thread_current()->elem, compare_threads_by_priority, NULL);
-      
-      thread_block ();
-    }
+  {
+    list_insert_ordered (&sema->waiters, &thread_current()->elem, compare_threads_by_priority, NULL);
+    thread_block ();
+  }
   sema->value--;
   intr_set_level (old_level);
 }
@@ -114,10 +133,16 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
+  if (!list_empty (&sema->waiters))
+  {
     thread_unblock (list_entry (list_pop_back (&sema->waiters),
                                 struct thread, elem));
+  }
   sema->value++;
+  if (!intr_context())
+    thread_yield();
+  else
+    intr_yield_on_return();
   intr_set_level (old_level);
 }
 
@@ -199,6 +224,8 @@ lock_acquire (struct lock *lock)
 
   // #TODO nested priority donation
   // check if there are waiters, and see if donation is possible
+  // disable interrupts so queue isn't modified while reading
+  /*enum intr_level old_level = intr_disable();
   struct list* waiters = &lock->semaphore.waiters;
   if (!list_empty(waiters) && lock->holder)
   {
@@ -209,10 +236,11 @@ lock_acquire (struct lock *lock)
       if (lock->holder->priority < donor->priority)
       {
         thread_donate_priority(lock->holder, donor);
-        printf("fuck you\n");
       }
     }
   }
+  // re enable interrupts
+  intr_set_level(old_level);*/
 
   sema_down (&lock->semaphore);
   lock->holder = thread_current();
@@ -251,6 +279,8 @@ lock_release (struct lock *lock)
 
   // #TODO nested priority donation revoke
   // check if there are waiters, and remove any donations
+  // disable interrupts so queue isn't modified while reading
+  /*enum intr_level old_level = intr_disable();
   struct list* waiters = &lock->semaphore.waiters;
   if (!list_empty(waiters))
   {
@@ -271,8 +301,11 @@ lock_release (struct lock *lock)
     }
   }
 
+  intr_set_level(old_level);*/
   lock->holder = NULL;
   sema_up (&lock->semaphore);
+
+  //thread_yield();
 }
 
 /* Returns true if the current thread holds LOCK, false

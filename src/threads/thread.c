@@ -15,6 +15,7 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+#include "devices/timer.h"
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -60,6 +61,9 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
+// static variable that stores the current load average of all the threads
+static fp_real s_load_average;
+
 static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
@@ -72,8 +76,58 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+// helper function to recalculate recent cpu for all threads
+// recent = (2 * load average)/(2 * load_average + 1) * recent + nice
+void thread_recalculate_recent_cpu(void)
+{
+  // only do work if mlfqs is enabled
+  if (true || !thread_mlfqs)
+    return;
+  // iterate all threads and recalculate recent cpu value
+  for (struct list_elem* it = list_begin(&all_list); it != list_end(&all_list); it = list_next(it))
+  {
+    struct thread* t = list_entry(it, struct thread, allelem);
+    // let a = (2 * load_avg)
+    fp_real a = 2 * s_load_average;
+    // let b = (2 * load_avg + 1)
+    fp_real b = fp_add(2 * s_load_average, 1);
+    // let c = a/b
+    fp_real c = fp_div(a, b);
+    // let recent = c * recent + nice
+    t->m_recent_cpu = fp_add(fp_mult(c, t->m_recent_cpu), t->m_nice_value);
+  }
+}
+
+// helper function to re-caclulate load average over all threads (occurs once per second due to assumptions made)
+// load_avg = (59/60)*load_avg + (1/60)*ready_threads
+void thread_recalculate_load_avg(void)
+{
+  // only do work if mlfqs is enabled
+  if (!thread_mlfqs)
+    return;
+  
+  
+  int ready_threads = (int)list_size(&ready_list); //+ (thread_current() != idle ? 1 : 0);
+  // add currently running threads
+  for (struct list_elem* it = list_begin(&all_list); it != list_end(&all_list); it = list_next(it))
+  {
+    struct thread* t = list_entry(it, struct thread, allelem);
+    if (t->status == THREAD_RUNNING && t != idle_thread)
+      ++ready_threads;
+  }
+
+  // let a = (59/60)*load_avg
+  //fp_real a = fp_mult(fp_div(fp_int_to_real(59), fp_int_to_real(60)), s_load_average);
+  fp_real a = (s_load_average * 59) / 60;
+  // let b = (1/60)*ready_threads
+  //fp_real b = fp_mult(fp_div(fp_int_to_real(1), fp_int_to_real(60)), fp_int_to_real(ready_threads));
+  fp_real b = fp_int_to_real(ready_threads) / 60;
+  // load_avg = a + b
+  s_load_average = a + b;
+}
+
 // helper function to get the *modified* priority of a thread (higher value between donations and base)
-static int get_modified_priority_of_thread(const struct thread* t)
+int get_modified_priority_of_thread(const struct thread* t)
 {
   int highest_prio = t->priority;
   if (list_empty(&t->m_donatees))
@@ -101,7 +155,7 @@ bool compare_threads_by_priority(
   const struct thread* thread2 = list_entry(thread_elem2, struct thread, elem);
 
   // compare priorities and donations
-  return get_modified_priority_of_thread(thread1) < get_modified_priority_of_thread(thread2);
+  return get_modified_priority_of_thread(thread1) <= get_modified_priority_of_thread(thread2);
 }
 
 
@@ -126,6 +180,8 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+
+  s_load_average = fp_int_to_real(0);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -157,7 +213,6 @@ void
 thread_tick (void) 
 {
   struct thread *t = thread_current ();
-
   /* Update statistics. */
   if (t == idle_thread)
     idle_ticks++;
@@ -167,6 +222,23 @@ thread_tick (void)
 #endif
   else
     kernel_ticks++;
+
+  // update recent cpu time
+  if (t != idle_thread)
+    t->m_recent_cpu++;
+
+  // do load avg and recent cpu calculations
+  if (thread_mlfqs && timer_ticks() % TIMER_FREQ == 0)
+  {
+    // disable interrupts so we don't get interrupted while doing calculations
+    enum intr_level old_level = intr_disable();
+    // do load average calculation
+    thread_recalculate_load_avg();
+    // load average used in recent calculation, so it must come after
+    thread_recalculate_recent_cpu();
+    // re-enable interrupts
+    intr_set_level(old_level); 
+  }
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -403,33 +475,49 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+  // set the current thread to have a new nice value
+  struct thread* cur = thread_current();
+  cur->m_nice_value = nice;
+
+  // recalculate thead's priority
+  cur->priority = PRI_MAX - (thread_get_recent_cpu() / 4) - (cur->m_nice_value * 2);
+
+  // yield so if there is a new, higher priority thread, the current thread preempts
+  thread_yield();
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  struct thread* cur = thread_current();
+  return cur->m_nice_value;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  enum intr_level old_level = intr_disable();
+  int load = fp_real_to_int_nearest(s_load_average * 100);
+  intr_set_level(old_level);
+
+  return load;
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  struct thread* cur = thread_current();
+
+  enum intr_level old_level = intr_disable();
+  int recent = fp_real_to_int_nearest(cur->m_recent_cpu * 100);
+  intr_set_level(old_level);
+
+  return recent;
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -518,8 +606,10 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->m_recent_cpu = fp_int_to_real(0);         // initialize recent cpu
+  t->m_nice_value = 0;                         // initialize nice value
   sema_init(&(t->m_sleep_timer_semaphore), 0); // initialize wait semaphore for sleep timer
-  list_init(&t->m_donatees); // initialize donatees list
+  list_init(&t->m_donatees);                   // initialize donatees list
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();

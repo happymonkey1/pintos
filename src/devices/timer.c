@@ -200,9 +200,6 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   
-  if (list_empty(&s_blocked_threads_list))
-    return;
-  
   // should this be done in thread_tick?
   // #NOTE(Sean) i don't think we need to disable interrupts here, since we are already inside an interrupt
   

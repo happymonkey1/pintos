@@ -36,7 +36,7 @@
 static void donate_priority_recursive(struct lock* lock, int depth)
 {
   // don't do work if there is no one holding the lock
-  if (lock->holder == NULL || depth > 10)
+  if (lock->holder == NULL || depth > 8)
     return;
 
   struct thread* holder = lock->holder;
@@ -61,11 +61,11 @@ static void donate_priority_recursive(struct lock* lock, int depth)
   donate_priority_recursive(waiting_lock, depth + 1);
   
   // see if we need to requeue a thread waiting for a lock that got released
-  if (holder->m_waiting_for_lock == NULL)
+  /*if (holder->m_waiting_for_lock == NULL)
   {
     add_to_ready_queue(holder);
     return;
-  }
+  }*/
 }
 
 static void revoke_donated_priority_recursive(struct lock* lock)
@@ -352,6 +352,44 @@ struct semaphore_elem
     struct semaphore semaphore;         /* This semaphore. */
   };
 
+static bool cond_compare_threads_by_priority(const struct list_elem* a, const struct list_elem* b, void* aux)
+{
+  // get thread pointers using list_entry macro
+  const struct semaphore_elem* sema_elem1 = list_entry(a, struct semaphore_elem, elem);
+  const struct semaphore_elem* sema_elem2 = list_entry(b, struct semaphore_elem, elem);
+
+  // find highest priority waiter in semaphore_elem 1
+  int sema_elem1_highest_prio = 0;
+  for (
+    struct list_elem* it = list_begin(&sema_elem1->semaphore.waiters);
+    it != list_end(&sema_elem1->semaphore.waiters);
+    it = list_next(it)
+  )
+  {
+    struct thread* t = list_entry(it, struct thread, elem); 
+    int prio = get_modified_priority_of_thread(t);
+    if (prio > sema_elem1_highest_prio)
+      sema_elem1_highest_prio = prio;
+  }
+
+  // find highest priority waiter in semaphore_elem 2
+  int sema_elem2_highest_prio = 0;
+  for (
+    struct list_elem* it = list_begin(&sema_elem2->semaphore.waiters);
+    it != list_end(&sema_elem2->semaphore.waiters);
+    it = list_next(it)
+  )
+  {
+    struct thread* t = list_entry(it, struct thread, elem); 
+    int prio = get_modified_priority_of_thread(t);
+    if (prio > sema_elem2_highest_prio)
+      sema_elem2_highest_prio = prio;
+  }
+
+  // compare priorities and donations
+  return sema_elem1_highest_prio <= sema_elem2_highest_prio;
+}
+
 /* Initializes condition variable COND.  A condition variable
    allows one piece of code to signal a condition and cooperating
    code to receive the signal and act upon it. */
@@ -394,7 +432,7 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
-  list_push_back(&cond->waiters, &waiter.elem);
+  list_insert_ordered(&cond->waiters, &waiter.elem, cond_compare_threads_by_priority, NULL);
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
@@ -416,7 +454,7 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock_held_by_current_thread (lock));
 
   if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_front (&cond->waiters),
+    sema_up (&list_entry (list_pop_back (&cond->waiters),
                           struct semaphore_elem, elem)->semaphore);
 }
 

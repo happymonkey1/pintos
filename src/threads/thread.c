@@ -111,26 +111,46 @@ void thread_recalculate_load_avg(void)
     return;
   
   
-  //int ready_threads = (int)list_size(&ready_list); //+ (thread_current() != idle ? 1 : 0);
+  int ready_threads = get_ready_thread_count();
   // add currently running threads
-  int ready_threads = 0;
+  /*int ready_threads = 0;
   for (struct list_elem* it = list_begin(&all_list); it != list_end(&all_list); it = list_next(it))
   {
     struct thread* t = list_entry(it, struct thread, allelem);
+    if (t == idle_thread)
+      continue;
     bool running_or_ready = t->status == THREAD_RUNNING || t->status == THREAD_READY;
-    if (t != idle_thread && running_or_ready)
+    if (running_or_ready)
       ++ready_threads;
-  }
+  }*/
 
   // let a = (59/60)*load_avg
   //fp_real a = fp_mult(fp_div(fp_int_to_real(59), fp_int_to_real(60)), s_load_average);
-  fp_real a = (s_load_average * 59) / 60;
+  fp_real a = fp_mult(fp_int_to_real(59), s_load_average) / 60;
   // let b = (1/60)*ready_threads
   //fp_real b = fp_mult(fp_div(fp_int_to_real(1), fp_int_to_real(60)), fp_int_to_real(ready_threads));
   fp_real b = fp_int_to_real(ready_threads) / 60;
   // load_avg = a + b
   s_load_average = a + b;
 }
+
+// helper function to compute the number of ready and running threads
+int get_ready_thread_count(void)
+{
+  int ready_threads = 0;
+  for (struct list_elem* it = list_begin(&all_list); it != list_end(&all_list); it = list_next(it))
+  {
+    struct thread* t = list_entry(it, struct thread, allelem);
+    if (t == idle_thread)
+      continue;
+    bool running_or_ready = t->status == THREAD_RUNNING || t->status == THREAD_READY;
+    if (running_or_ready)
+      ++ready_threads;
+  }
+
+  return ready_threads;
+}
+
 
 // helper function that adds element to ready queue in sorted order
 void add_to_ready_queue(struct thread* t)
@@ -194,6 +214,7 @@ void thread_requeue_after_lock_release(struct thread* t)
   list_insert_ordered(&ready_list, &t->elem, compare_threads_by_priority, NULL);
 }
 
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -248,6 +269,15 @@ thread_start (void)
 void
 thread_tick (void) 
 {
+  // do load avg and recent cpu calculations
+  if (thread_mlfqs && (timer_ticks() % TIMER_FREQ == 0))
+  {
+    // do load average calculation
+    thread_recalculate_load_avg();
+    // load average used in recent calculation, so it must come after
+    thread_recalculate_recent_cpu();
+  }
+
   struct thread *t = thread_current ();
   /* Update statistics. */
   if (t == idle_thread)
@@ -262,15 +292,6 @@ thread_tick (void)
   // update recent cpu time
   if (thread_mlfqs && t != idle_thread)
     fp_add(t->m_recent_cpu, 1);
-
-  // do load avg and recent cpu calculations
-  if (thread_mlfqs && timer_ticks() % TIMER_FREQ == 0)
-  {
-    // do load average calculation
-    thread_recalculate_load_avg();
-    // load average used in recent calculation, so it must come after
-    thread_recalculate_recent_cpu();
-  }
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -504,6 +525,11 @@ int
 thread_get_priority (void) 
 {
   const struct thread* t = thread_current();
+
+  // mlfqs has separate priority calc
+  if (thread_mlfqs)
+    return t->priority;
+
   // return the greater value between the base priority and donated priorities
   return get_modified_priority_of_thread(t);
 }
@@ -536,7 +562,7 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void) 
 {
-  return fp_real_to_int_nearest(s_load_average * 100);
+  return fp_real_to_int_nearest(s_load_average * 100) ;
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */

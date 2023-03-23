@@ -137,6 +137,9 @@ void add_to_ready_queue(struct thread* t);
 // used to requeue a thread into the ready list when it was waiting for a lock which has since been released.
 void thread_requeue_after_lock_release(struct thread* t);
 
+// helper function to get the number of ready or running threads
+int get_ready_thread_count(void);
+
 void thread_init (void);
 void thread_start (void);
 

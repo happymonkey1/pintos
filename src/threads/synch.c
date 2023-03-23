@@ -129,9 +129,7 @@ sema_down (struct semaphore *sema)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  // make sure we re-sort by priorities, because priorities could have changed from donations
-  //if (!list_empty(&sema->waiters))
-  //  list_sort(&sema->waiters, &compare_threads_by_priority, NULL);
+  //donate_priority_recursive();
   
   while (sema->value == 0) 
   {

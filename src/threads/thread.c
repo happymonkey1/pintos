@@ -79,9 +79,23 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+inline static void thread_calculate_priority(struct thread* t)
+{
+  // check for programmer error
+  if (!thread_mlfqs)
+    return;
+  
+  fp_real fp_priority_val = fp_int_to_real(PRI_MAX) - (t->m_recent_cpu / 4) - fp_int_to_real(t->m_nice_value * 2);
+  t->priority = fp_real_to_int_nearest(fp_priority_val);
+  if (t->priority > PRI_MAX)
+    t->priority = PRI_MAX;
+  else if (t->priority < PRI_MIN)
+    t->priority = PRI_MIN;
+}
+
 // helper function to recalculate recent cpu for all threads
 // recent = (2 * load average)/(2 * load_average + 1) * recent + nice
-void thread_recalculate_recent_cpu(void)
+inline static void thread_recalculate_recent_cpu(void)
 {
   // only do work if mlfqs is enabled
   if (!thread_mlfqs)
@@ -92,9 +106,9 @@ void thread_recalculate_recent_cpu(void)
   {
     struct thread* t = list_entry(it, struct thread, allelem);
     // let a = (2 * load_avg)
-    fp_real a = 2 * s_load_average;
+    fp_real a = s_load_average * 2;
     // let b = (2 * load_avg + 1)
-    fp_real b = fp_add(2 * s_load_average, 1);
+    fp_real b = fp_add(s_load_average * 2, 1);
     // let c = a/b
     fp_real c = fp_div(a, b);
     // let recent = c * recent + nice
@@ -104,7 +118,7 @@ void thread_recalculate_recent_cpu(void)
 
 // helper function to re-caclulate load average over all threads (occurs once per second due to assumptions made)
 // load_avg = (59/60)*load_avg + (1/60)*ready_threads
-void thread_recalculate_load_avg(void)
+inline static void thread_recalculate_load_avg(void)
 {
   // only do work if mlfqs is enabled
   if (!thread_mlfqs)
@@ -269,15 +283,6 @@ thread_start (void)
 void
 thread_tick (void) 
 {
-  // do load avg and recent cpu calculations
-  if (thread_mlfqs && (timer_ticks() % TIMER_FREQ == 0))
-  {
-    // do load average calculation
-    thread_recalculate_load_avg();
-    // load average used in recent calculation, so it must come after
-    thread_recalculate_recent_cpu();
-  }
-
   struct thread *t = thread_current ();
   /* Update statistics. */
   if (t == idle_thread)
@@ -291,7 +296,21 @@ thread_tick (void)
 
   // update recent cpu time
   if (thread_mlfqs && t != idle_thread)
-    fp_add(t->m_recent_cpu, 1);
+    t->m_recent_cpu = fp_add(t->m_recent_cpu, 1);
+
+  int timer_ticks_count = timer_ticks();
+  // do load avg and recent cpu calculations
+  if (thread_mlfqs && (timer_ticks_count % TIMER_FREQ == 0))
+  {
+    // do load average calculation
+    thread_recalculate_load_avg();
+    // load average used in recent calculation, so it must come after
+    thread_recalculate_recent_cpu();
+  }
+
+  // recalculate priorities every four ticks for mlfqs priority
+  if (thread_mlfqs && (timer_ticks_count % TIME_SLICE == 0))
+    thread_calculate_priority(t);
 
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
@@ -543,8 +562,10 @@ thread_set_nice (int nice)
   cur->m_nice_value = nice;
 
   // recalculate thead's priority
-  fp_real fp_priority_val = fp_int_to_real(PRI_MAX) - (cur->m_recent_cpu / 4) - fp_int_to_real(cur->m_nice_value * 2);
-  cur->priority = fp_real_to_int(fp_priority_val);
+  thread_calculate_priority(cur);
+
+  //if (!list_empty(&ready_list))
+  //  list_sort(&ready_list, compare_threads_by_priority, NULL);
 
   // yield so if there is a new, higher priority thread, the current thread preempts
   thread_yield();

@@ -125,10 +125,6 @@ struct thread
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
 
-// helper function to recalculate recent cpu for all threads (occurs once per second due to assumptions made)
-void thread_recalculate_recent_cpu(void);
-// helper function to re-caclulate load average over all threads (occurs once per second due to assumptions made)
-void thread_recalculate_load_avg(void);
 // helper function to get a *modified* priority of a thread (max value of actual priority and donated priorities)
 int get_modified_priority_of_thread(const struct thread* t);
 // helper function to add a thread back into the ready queue

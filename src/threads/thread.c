@@ -95,7 +95,7 @@ inline static void thread_calculate_priority(struct thread* t)
 
 // helper function to recalculate recent cpu for all threads
 // recent = (2 * load average)/(2 * load_average + 1) * recent + nice
-inline static void thread_recalculate_recent_cpu(void)
+void thread_recalculate_recent_cpu(void)
 {
   // only do work if mlfqs is enabled
   if (!thread_mlfqs)
@@ -118,14 +118,16 @@ inline static void thread_recalculate_recent_cpu(void)
 
 // helper function to re-caclulate load average over all threads (occurs once per second due to assumptions made)
 // load_avg = (59/60)*load_avg + (1/60)*ready_threads
-inline static void thread_recalculate_load_avg(void)
+void thread_recalculate_load_avg(void)
 {
   // only do work if mlfqs is enabled
   if (!thread_mlfqs)
     return;
   
   
-  int ready_threads = get_ready_thread_count();
+  int ready_threads = list_size(&ready_list);
+  if (thread_current() != idle_thread)
+    ++ready_threads;
   // add currently running threads
   /*int ready_threads = 0;
   for (struct list_elem* it = list_begin(&all_list); it != list_end(&all_list); it = list_next(it))
@@ -192,8 +194,9 @@ int get_modified_priority_of_thread(const struct thread* t)
   for (const struct list_elem* it = list_cbegin(&t->m_donatees); it != list_cend(&t->m_donatees); it = list_cnext(it))
   {
     const struct thread* donor = list_entry(it, struct thread, m_donor_elem);
-    if (get_modified_priority_of_thread(donor) > highest_prio)
-      highest_prio = get_modified_priority_of_thread(donor);
+    int prio = get_modified_priority_of_thread(donor);
+    if (prio > highest_prio)
+      highest_prio = prio;
   }
 
   return highest_prio;
@@ -295,23 +298,26 @@ thread_tick (void)
     kernel_ticks++;
 
   // update recent cpu time
-  if (thread_mlfqs && t != idle_thread)
-    t->m_recent_cpu = fp_add(t->m_recent_cpu, 1);
-
-  int timer_ticks_count = timer_ticks();
-  // do load avg and recent cpu calculations
-  if (thread_mlfqs && (timer_ticks_count % TIMER_FREQ == 0))
+  if (thread_mlfqs)
   {
-    // do load average calculation
-    thread_recalculate_load_avg();
-    // load average used in recent calculation, so it must come after
-    thread_recalculate_recent_cpu();
+    if (t != idle_thread)
+        t->m_recent_cpu = fp_add(t->m_recent_cpu, 1);
+
+    // update load and recent cpu once per second
+    if (timer_ticks() % TIMER_FREQ == 0)
+    {
+      // do load average calculation
+      thread_recalculate_load_avg();
+      // do recent cpu
+      thread_recalculate_recent_cpu();
+    }
+
+    // recalculate priorities every four ticks for mlfqs priority
+    // offset priority calculation to *hopefully* help with load average
+    if (thread_ticks % TIME_SLICE == 0)
+      thread_calculate_priority(t);
   }
-
-  // recalculate priorities every four ticks for mlfqs priority
-  if (thread_mlfqs && (timer_ticks_count % TIME_SLICE == 0))
-    thread_calculate_priority(t);
-
+  
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
@@ -375,6 +381,9 @@ thread_create (const char *name, int priority,
   sf = alloc_frame (t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
+
+  if (thread_mlfqs)
+    thread_calculate_priority(t);
 
   /* Add to run queue. */
   thread_unblock (t);

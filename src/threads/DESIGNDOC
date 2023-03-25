@@ -1,0 +1,360 @@
+			+--------------------+
+			|    CompSci 143A    |
+			| PROJECT 1: THREADS |
+			|   DESIGN DOCUMENT  |
+			+--------------------+
+				   
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Sean Browne <sjbrowne@uci.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission or notes for the
+>> TAs, please give them here.
+
+I made modfications so pintos would compile on wsl with modern toolchain (GCC 9.1)
+This includes modifications to `src\tests\threads\tests.c` and `src\threads\init.c`.
+I also defaulted the makefile to use qemu as a simulator.
+
+I also added some const versions of iteration functions to `list.h` and `list.c`
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			     ALARM CLOCK
+			     ===========
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                                  /* Thread identifier. */
+    enum thread_status status;                  /* Thread state. */
+    char name[16];                              /* Name (for debugging purposes). */
+    uint8_t *stack;                             /* Saved stack pointer. */
+    int priority;                               /* Priority. */
+    struct list_elem allelem;                   /* List element for all threads list. */
+
+    // owned by timer.c
+    int64_t m_wakeup_tick;                      // store minimum tick for when a *sleeping* thread should be woken up
+    struct list_elem m_sleep_timer;             // store sleep timer for a thread, used with m_wakeup_tick
+    // ================
+    
+    // shared by timer.c and thread.c
+    struct semaphore m_sleep_timer_semaphore;   // sempahore to block sleeping threads
+    // ==============================
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                  /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;                     /* Detects stack overflow. */
+  };
+I added member variables to the `thread` struct, this includes:
+    - `m_wakeup_tick` which tracks the minimum tick a sleeping thread should be woken up by
+    - `m_sleep_timer` which is a list element for a sleeping thread queue
+    - `m_sleep_timer_semaphore` which is a semaphore for sleeping threads (so they block instead of busy waiting)
+
+in devices\timer.c, I added the following:
+`static struct list s_blocked_threads_list;`
+This is a static variable which stores a list of blocked threads
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe what happens in a call to timer_sleep(),
+>> including the effects of the timer interrupt handler.
+
+When timer sleep is called, the currrent thread stores the minimum tick for when the thread should be woken up. Then the thread is stored in the sleeping thread list. Threads are inserted in ascending wakeup tick order. Finally, the sleeping thread semaphore is "downed".
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+
+The timer interrupt handler iterates the sleeping thread list, and if the current tick is equal to or greater than a thread's stored `m_wakeup_tick` value, the thread is unblocked (the semaphore is "uped"). While iterating (and since the threads are stored in ascending wakeup tick order), if the wakeup tick is less than the current tick, iteration breaks. This makes sure we don't do any unecessary work.
+
+---- SYNCHRONIZATION ----
+
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?
+
+interrupts are disabled when pushing to the list so there are no race conditions.
+
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?
+
+interrupts are disabled while iterating the sleeping thread list so there are no race conditions.
+
+---- RATIONALE ----
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+I considered using semaphores/locks to make sure race conditions were avoided, but the discussion slides (or a piazza note, I can't remember which one exactly) said that disabling interrupts for this purpose was fine. Disabling interrupts is definetly easier (and uses less stack space) than handling locks/semaphores.
+
+			 PRIORITY SCHEDULING
+			 ===================
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                                  /* Thread identifier. */
+    enum thread_status status;                  /* Thread state. */
+    char name[16];                              /* Name (for debugging purposes). */
+    uint8_t *stack;                             /* Saved stack pointer. */
+    int priority;                               /* Priority. */
+    struct list_elem allelem;                   /* List element for all threads list. */
+
+    // owned by timer.c
+    int64_t m_wakeup_tick;                      // store minimum tick for when a *sleeping* thread should be woken up
+    struct list_elem m_sleep_timer;             // store sleep timer for a thread, used with m_wakeup_tick
+    // ================
+    
+    // shared by timer.c and thread.c
+    struct semaphore m_sleep_timer_semaphore;   // sempahore to block sleeping threads
+    // ==============================
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;                      /* List element. */
+    struct list m_donatees;                     // list of threads which are donating priority
+    struct list_elem m_donor_elem;              // list element of donor list
+    bool m_donated;                             // flag for whether the thread has donated so we don't donate multiple times
+    struct lock* m_waiting_for_lock;            // pointer to a lock that is blocking thread
+    // =======================================
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                  /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;                     /* Detects stack overflow. */
+  };
+
+As a note, this includes declarations that were added for the blocking alarm solutions.
+
+I added the following members:
+    - `m_donatees` a list of "donating" threads, which tracks threads that are donating their priority to this thread
+    - `m_donor_elem` which is a list element used for inserting into the `m_donatees` list
+    - `m_donated` which is a flag to track whether a thread has donated their priority already (mostly used for debugging)
+    - `m_waiting_for_lock` which is a pointer to a lock that the thread is currently waiting for
+
+>> B2: Explain the data structure used to track priority donation.
+>> Use ASCII art to diagram a nested donation.  (Alternately, submit a
+>> .png file.)
+
+Each semphore has a waiting list, and when retrieving a thread's priority, the thread returns the maximum value between it's original priority and all of the threads in the donation list. This process is recursive to allow for indirect priority donation. Each thread also tracks a lock that it is waiting for (used in recursive priority donation) 
+
+Lock A with Semaphore A
+holder: Thread A
+waiting list: Thread A, Thread B
+
+Lock B with Semaphore B
+holder: Thread B
+waiting list: Thread C
+
+Thread C (donates to) --> Thread B
+Thread B (donates to) --> Thread A
+
+Thread A: prio L
+Thread B: prio M
+Thread C: prio H
+
+When doing (recursive) get priority calcuation on Thread A:
+Thread A returns max(original priority, max(lockA->waiting_list = { Thread A, Thread B }))
+    (recurses) --> max(lock->waiting_list = { Thread A, Thread B }) 
+        (recurses) --> max(Thread B original prio, max(lockB->waiting_list = { Thread C }))
+--> returns priority of Thread C (prio H)
+
+---- ALGORITHMS ----
+
+>> B3: How do you ensure that the highest priority thread waiting for
+>> a lock, semaphore, or condition variable wakes up first?
+
+When inserting a thread into a waiting list, the order is inserted in ascending order (by priority). The priority value used is the maximum between it's original priority, and any of the donated priorities (obtained by searching through the donation list). This process is recursive so indirect priority donation can occur. When unblocking a thread, the back of the list is popped (thus retrieving the highest priority thread)
+
+>> B4: Describe the sequence of events when a call to lock_acquire()
+>> causes a priority donation.  How is nested donation handled?
+
+The current thread updates it's `m_waiting_for_lock` variable to point to the current lock.
+Then, if the lock's holder is not null, the current thread donates it's priority to the holder (if valid).
+Then, we recursively donate priority to a thread which the current lock's holder is waiting for. This repeats the steps above, but for the holder of the lock each time.
+
+>> B5: Describe the sequence of events when lock_release() is called
+>> on a lock that a higher-priority thread is waiting for.
+
+First, the current thread checks if it stored that it was waiting for the current lock (in `m_waiting_for_lock`), and if so, nulls out the pointer.
+Then, we iterate the list of waiting list for the lock, and (in a nest loop) iterate the donors of the lock's holder. If we find matches during iteration, then we remove a thread from the donor list.
+
+Because of the recursive getting priority algorithm, we do not need to recursively remove from any donation lists.
+
+---- SYNCHRONIZATION ----
+
+>> B6: Describe a potential race in thread_set_priority() and explain
+>> how your implementation avoids it.  Can you use a lock to avoid
+>> this race?
+
+Because donated priority is not cached (recursively calculated instead), this avoids any race conditions of setting a thread's priority (if a thread were to yield while trying to set). Adding threads to the donation list only happens when interrupts are disabled, so there are no race conditions there either.
+
+---- RATIONALE ----
+
+>> B7: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+While iterating the donation list and re-calculating the max between original and donated priority takes more computations than simply caching the value, this eliminates much of the complexity when both donating and revoking priorities, as well as removes potential race conditions when setting or revoking donated priority. 
+
+			  ADVANCED SCHEDULER
+			  ==================
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+`typedef int fp_real;`
+- this typedefs the type an integer as a "fixed point" type (to help me identify when to use certain fixed point calculations)
+
+struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                                  /* Thread identifier. */
+    enum thread_status status;                  /* Thread state. */
+    char name[16];                              /* Name (for debugging purposes). */
+    uint8_t *stack;                             /* Saved stack pointer. */
+    int priority;                               /* Priority. */
+    struct list_elem allelem;                   /* List element for all threads list. */
+    fp_real m_recent_cpu;                       // amount of CPU time a thread has received "recently"
+    int m_nice_value;                           // "nice" value of the thread
+
+    // owned by timer.c
+    int64_t m_wakeup_tick;                      // store minimum tick for when a *sleeping* thread should be woken up
+    struct list_elem m_sleep_timer;             // store sleep timer for a thread, used with m_wakeup_tick
+    // ================
+    
+    // shared by timer.c and thread.c
+    struct semaphore m_sleep_timer_semaphore;   // sempahore to block sleeping threads
+    // ==============================
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;                      /* List element. */
+    struct list m_donatees;                     // list of threads which are donating priority
+    struct list_elem m_donor_elem;              // list element of donor list
+    bool m_donated;                             // flag for whether the thread has donated so we don't donate multiple times
+    struct lock* m_waiting_for_lock;            // pointer to a lock that is blocking thread
+    // =======================================
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                  /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;                     /* Detects stack overflow. */
+  };
+
+Note: this includes declarations added for both the alarm and priority scheduler.
+
+I added the following members to the thread struct:
+    - `m_recent_cpu` which stores the recent cpu value
+    - `m_nice_value` which stores the nice value
+
+---- ALGORITHMS ----
+
+>> C2: Suppose threads A, B, and C have nice values 0, 1, and 2.  Each
+>> has a recent_cpu value of 0.  Fill in the table below showing the
+>> scheduling decision and the priority and recent_cpu values for each
+>> thread after each given number of timer ticks:
+
+timer  recent_cpu    priority   thread
+ticks   A   B   C   A   B   C   to run
+-----  --  --  --  --  --  --   ------
+ 0      0   0   0  63  62  61     A
+ 4      4   0   0  62  62  61     A
+ 8      8   0   0  61  61  61     B
+12      8   8   0  61  60  61     A
+16      12  8   0  60  60  61     C
+20      12  8   4  60  60  60     C
+24      12  8   8  60  60  59     A
+28      16  8   8  59  60  59     B
+32      16  12  8  59  59  59     B
+36      16  16  8  59  58  59     A
+
+>> C3: Did any ambiguities in the scheduler specification make values
+>> in the table uncertain?  If so, what rule did you use to resolve
+>> them?  Does this match the behavior of your scheduler?
+
+How to deal with equal priority threads. I ended up just having the most recently pushed thread (of equal, highest priority) run. This in term usually meant that the current thread kept running (if it maintained the highest priority). I used this rule when calculating the table above.
+
+>> C4: How is the way you divided the cost of scheduling between code
+>> inside and outside interrupt context likely to affect performance?
+
+The more time spent inside of the interrupt context, the less time the thread that will get scheduled to run has to do cpu bursts.
+
+---- RATIONALE ----
+
+>> C5: Briefly critique your design, pointing out advantages and
+>> disadvantages in your design choices.  If you were to have extra
+>> time to work on this part of the project, how might you choose to
+>> refine or improve your design?
+
+I think when deciding between equal priority threads, the *last* thread that has run should get to run (more equal distribution of recent cpu). The time spent in an interrupt context is also not well optimized, which means threads get less actual time to execute code. I also think that I should have implemented 64 priority queues instead of just one, to optimize inserting/retrieving priority threads.
+
+>> C6: The assignment explains arithmetic for fixed-point math in
+>> detail, but it leaves it open to you to implement it.  Why did you
+>> decide to implement it the way you did?  If you created an
+>> abstraction layer for fixed-point math, that is, an abstract data
+>> type and/or a set of functions or macros to manipulate fixed-point
+>> numbers, why did you do so?  If not, why not?
+
+I used inlined functions to implement fixed point math functions. I did not create an abstract data type, though creating one would probably have helped when debugging issues (I had a couple issues where I wasn't "casting" to a float when I should have been). Functions made the most "sense" to me so I went with that.
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+I enjoyed the assignment, but wasn't motivited to finish all of it since it wasn't weighted that much.
+I had 2 tests still not passing, which equate to ~1% of my real grade, which I didn't deem as worth it to finish when I could spend that doing work for other classes. I spent 1-2 hours per day for about a week on the assignment. Good dificulty and time spent overall, just wish it was worth more of overall grade.
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+Yes, getting hands on experiencing developing parts of OS helped me understand the concepts better.
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+No, enough hints and guidance given. 
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+Did not ask for help so N/A.
+
+>> Any other comments?
+
+Overall, I enjoyed project, I wish that there was an option to work on the project more (maybe more "projects"/labs from the pintos lab) to do *instead* of final. 

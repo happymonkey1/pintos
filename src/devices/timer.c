@@ -199,10 +199,11 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
-  
+
+  thread_tick ();
+
   // should this be done in thread_tick?
   // #NOTE(Sean) i don't think we need to disable interrupts here, since we are already inside an interrupt
-  
   struct list_elem* it = list_begin(&s_blocked_threads_list);
   struct list_elem* end = list_end(&s_blocked_threads_list);
   while (it != end)
@@ -221,7 +222,6 @@ timer_interrupt (struct intr_frame *args UNUSED)
     it = list_remove(it); 
   }
 
-  thread_tick ();
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
